@@ -9,7 +9,9 @@ const checkAuth = require("../middleware/check-auth");
 // get /cat-videos/:movieId
 //router.get('/:movieId',videoStream);
 //router.get("/vids",videoStream.getVideosByCategory);
+
 router.use(checkAuth);
+router.delete("/videos/:id", videoStream.deleteVideo);
 router.get("/myvideos", videoStream.getVideosByCreator);
 router.get("/videos", videoStream.getVideos);
 router.get("/videos/:id", videoStream.getVideoStream);

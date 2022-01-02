@@ -17,8 +17,8 @@ exports.getVideos = async (req, res, next) => {
     await Promise.all(
       category_list.map(async (category) => {
         let video = await videoSchema.find({ category: category._id });
-        if (video.length>0) {
-          videosByCategory.push({[category.category]:video});
+        if (video.length > 0) {
+          videosByCategory.push({ [category.category]: video });
         }
       })
     );
@@ -50,7 +50,7 @@ exports.getVideos = async (req, res, next) => {
 // };
 exports.getThumbnailStream = async (req, res, next) => {
   let uId = req.params.id;
-  const DBConn = getDataBaseConnection("getVideoStream");
+  const DBConn = getDataBaseConnection("getThumbnailStream");
   DBConn().conn.client.connect(function (error, client) {
     if (error) {
       res.status(500).json(error);
@@ -105,56 +105,36 @@ exports.getCategories = async (req, res, next) => {
 
 exports.getVideoStream = (req, res, next) => {
   const DBConn = getDataBaseConnection("getVideoStream");
-  DBConn().conn.client.connect(function (error, client) {
-    if (error) {
-      res.status(500).json(error);
-      return;
-    }
-
-    // Check for range headers to find our start time
-    const range = req.headers.range;
-    if (!range) {
-      res.status(400).send("Requires Range header");
-    }
-
-    const db = client.db("CatFlix");
-    // GridFS Collection
-
-    db.collection("VideoFiles.files").findOne(
-      { _id: mongoose.Types.ObjectId(req.params.id) },
-      (err, video) => {
-        if (!video) {
-          res.status(404).send("Video is not found");
-          return;
-        }
-        console.log(video);
-        // Create response headers
+  DBConn().gfs.collection("VideoFiles");
+  DBConn().gfs.files.findOne(
+    { _id: mongoose.Types.ObjectId(req.params.id) },
+    (err, video) => {
+      if (err) {
+        return res.status(400).send({
+          err: errorHandler.getErrorMessage(err),
+        });
+      }
+      if (!video) {
+        return res.status(404).send({
+          err: "Not Found",
+        });
+      }
+      //const fileSize = stat.length;
+      const range = req.headers.range;
+      if (range) {
+        // const parts = range.replace(/bytes=/, "").split("-");
+        // const CHUNK_SIZE = 10 ** 6;
+        // const start = parseInt(parts[0], 10);
+        // const end = Math.min(start + CHUNK_SIZE, fileSize - 1);
+        // const chunksize = end - start + 1;
         const videoSize = video.length;
         const start = Number(range.replace(/\D/g, ""));
         const end = videoSize - 1;
-        let contentLength = end - start + 1;
 
-        const headers = {
-          "Content-Range": `bytes ${start}-${end}/${videoSize}`,
-          "Accept-Ranges": "bytes",
-          "Content-Length": contentLength,
-          "Content-Type": "video/mp4",
-        };
-
-        // HTTP Status 206 for Partial Content
-        res.writeHead(206, headers);
-
-        // Get the bucket and download stream from GridFS
-        const bucket = new mongodb.GridFSBucket(db, {
+        const contentLength = end - start + 1;
+        const bucket = new mongodb.GridFSBucket(mongoose.connection.db, {
           bucketName: "VideoFiles",
         });
-
-        const downloadStream = bucket.openDownloadStream(video._id, {
-          start: start,
-          end: end,
-        });
-
-        // Finally pipe video to response
         console.log(
           streamCounter,
           " start ",
@@ -166,17 +146,52 @@ exports.getVideoStream = (req, res, next) => {
           "video size",
           videoSize
         );
-        streamCounter++;
+        const downloadStream = bucket.openDownloadStreamByName(video.filename, {
+          start: start,
+          end: end + 1,
+        });
 
+        // Finally pipe video to response
+        streamCounter++;
+        const head = {
+          "Content-Range": `bytes ${start}-${end}/${videoSize}`,
+          "Accept-Ranges": "bytes",
+          "Content-Length": contentLength,
+          "Content-Type": "video/mp4",
+        };
+
+        res.writeHead(206, head);
+        downloadStream.on("data", (chunk) => {
+          res.write(chunk);
+        });
+
+        downloadStream.on("error", (err) => {
+          res.sendStatus(404);
+        });
+
+        downloadStream.on("end", () => {
+          res.end();
+          dbConnection.close();
+        });
+      } else {
+        const bucket = new mongodb.GridFSBucket(mongoose.connection.db, {
+          bucketName: "VideoFiles",
+        });
+        const downloadStream = bucket.openDownloadStream(video._id);
+        const head = {
+          "Content-Length": videoSize,
+          "Content-Type": "video/mp4",
+        };
+        res.writeHead(200, head);
         downloadStream.pipe(res);
       }
-    );
-  });
+    }
+  );
 };
 
 exports.deleteVideo = (req, res, next) => {
   const DBConn = getDataBaseConnection("deleteVideo");
-
+  const userId = req.userData.userId;
   let videoId = req.params.id;
   let video, video_chunk, video_file;
   //const userID = req.userData.userId;
@@ -187,20 +202,34 @@ exports.deleteVideo = (req, res, next) => {
       res.status(500).json(error);
       return;
     }
+    //try {
+
     try {
       video = await videoSchema
-        .find({
+        .findOne({
           VideoFileID: mongoose.Types.ObjectId(videoId),
         })
         .exec();
       console.log(video);
+      if (video.creator.toString() !== userId) {
+        res.status(403).json({ message: "Unauthorized" });
+        return;
+      }
+
+      console.log(video);
       video_file = await db
         .collection("VideoFiles.files")
-        .count({ _id: mongoose.Types.ObjectId(videoId) });
-      console.log("deleting chunks");
+        .deleteMany({ _id: mongoose.Types.ObjectId(videoId) });
       video_chunk = await db
         .collection("VideoFiles.chunks")
-        .count({ files_id: mongoose.Types.ObjectId(videoId) });
+        .deleteMany({ files_id: mongoose.Types.ObjectId(videoId) });
+      Thumbnails_file = await db
+        .collection("Thumbnails.files")
+        .deleteMany({ _id: mongoose.Types.ObjectId(video.ThumbnailFileID) });
+      Thumbnails_chunk = await db.collection("Thumbnails.chunks").deleteMany({
+        files_id: mongoose.Types.ObjectId(video.ThumbnailFileID),
+      });
+      video.delete();
       res.status(200).json({
         message: { video_file: video_file, video_chunk: video_chunk },
       });
