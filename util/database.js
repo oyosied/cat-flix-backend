@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 const Grid = require("gridfs-stream");
 const conn = mongoose.connection;
 const mongoURI =
-  "mongodb+srv://bfg9000:Aa123456@cluster0.1tyxb.mongodb.net/CatFlix?retryWrites=true&w=majority";
+  "";
 const options = {
   autoIndex: false, // Don't build indexes
   maxPoolSize: 10, // Maintain up to 10 socket connections
