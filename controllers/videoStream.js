@@ -1,9 +1,6 @@
 const mongoose = require("mongoose");
 const mongodb = require("mongodb");
-const {
-  getDataBaseConnection,
-  mongooseConnectGFS,
-} = require("../util/database.js");
+const { getDataBaseConnection } = require("../util/database.js");
 const categorySchema = require("../models/categorySchema");
 const videoSchema = require("../models/videoSchema");
 const HttpError = require("../models/http-error");
@@ -26,51 +23,69 @@ exports.getVideos = async (req, res, next) => {
   } catch {
     res.status(404).json({ message: "Could not find" });
   }
-  // const DBConn = getDataBaseConnection("getVideos");
-  // DBConn().gfs.collection("VideoFiles");
-  // let video_list = await DBConn().gfs.files.find({}).toArray();
-  // res.json(video_list);
 };
-// exports.getVideosByCategory = async (req, res, next) => {
-//   try {
-//     let category_list = await categorySchema.find({});
-//     let videosByCategory = [];
-//     await Promise.all(
-//       category_list.map(async (category) => {
-//         let video = await videoSchema.find({ category: category._id });
-//         if (video.length>0) {
-//           videosByCategory.push({[category.category]:video});
-//         }
-//       })
-//     );
-//     res.json(videosByCategory);
-//   } catch {
-//     res.status(404).json({ message: "Could not find" });
-//   }
-// };
+exports.getVideosByCategory = async (req, res, next) => {
+  try {
+    let videosByCategory = await videoSchema.find({
+      category: mongoose.Types.ObjectId(req.params.id),
+    });
+    console.log(req.params.id);
+    res.json(videosByCategory);
+  } catch {
+    res.status(404).json({ message: "Could not find" });
+  }
+};
 exports.getThumbnailStream = async (req, res, next) => {
   let uId = req.params.id;
   const DBConn = getDataBaseConnection("getThumbnailStream");
-  DBConn().conn.client.connect(function (error, client) {
-    if (error) {
-      res.status(500).json(error);
-      return;
+  DBConn().gfs.collection("Thumbnails");
+  DBConn().gfs.files.findOne(
+    { _id: mongoose.Types.ObjectId(req.params.id) },
+    (err, file) => {
+      if (err) {
+        return res.status(400).send({
+          err: errorHandler.getErrorMessage(err),
+        });
+      }
+      if (!file) {
+        return res.status(404).send({
+          err: "Not Found",
+        });
+      }
+      // GridFS Collection
+      //console.log(file);
+      const bucket = new mongodb.GridFSBucket(mongoose.connection.db, {
+        bucketName: "Thumbnails",
+      });
+
+      const downloadStream = bucket.openDownloadStream(
+        mongoose.Types.ObjectId(uId)
+      );
+
+      downloadStream.pipe(res);
     }
+  );
+  // const DBConn = getDataBaseConnection("getThumbnailStream");
+  // DBConn().conn.client.connect(function (error, client) {
+  //   if (error) {
+  //     res.status(500).json(error);
+  //     return;
+  //   }
 
-    const db = client.db("CatFlix");
-    // GridFS Collection
+  //   const db = client.db("CatFlix");
+  //   // GridFS Collection
 
-    const bucket = new mongodb.GridFSBucket(db, {
-      chunkSizeBytes: 1024,
-      bucketName: "Thumbnails",
-    });
+  //   const bucket = new mongodb.GridFSBucket(db, {
+  //     chunkSizeBytes: 1024,
+  //     bucketName: "Thumbnails",
+  //   });
 
-    const downloadStream = bucket.openDownloadStream(
-      mongoose.Types.ObjectId(uId)
-    );
+  //   const downloadStream = bucket.openDownloadStream(
+  //     mongoose.Types.ObjectId(uId)
+  //   );
 
-    downloadStream.pipe(res);
-  });
+  //   downloadStream.pipe(res);
+  // });
 };
 exports.getVideosByCreator = async (req, res, next) => {
   const userId = req.userData.userId;
@@ -115,21 +130,18 @@ exports.getVideoStream = (req, res, next) => {
         });
       }
       if (!video) {
+        console.log(video, "Couldn't stream video not found");
         return res.status(404).send({
           err: "Not Found",
         });
       }
-      //const fileSize = stat.length;
+      const videoSize = video.length;
       const range = req.headers.range;
       if (range) {
-        // const parts = range.replace(/bytes=/, "").split("-");
-        // const CHUNK_SIZE = 10 ** 6;
-        // const start = parseInt(parts[0], 10);
-        // const end = Math.min(start + CHUNK_SIZE, fileSize - 1);
-        // const chunksize = end - start + 1;
-        const videoSize = video.length;
+        
+        const CHUNK_SIZE = 10 ** 6;
         const start = Number(range.replace(/\D/g, ""));
-        const end = videoSize - 1;
+        const end = Math.min(start + CHUNK_SIZE, videoSize - 1);
 
         const contentLength = end - start + 1;
         const bucket = new mongodb.GridFSBucket(mongoose.connection.db, {
@@ -171,7 +183,6 @@ exports.getVideoStream = (req, res, next) => {
 
         downloadStream.on("end", () => {
           res.end();
-          dbConnection.close();
         });
       } else {
         const bucket = new mongodb.GridFSBucket(mongoose.connection.db, {
@@ -188,7 +199,7 @@ exports.getVideoStream = (req, res, next) => {
     }
   );
 };
-
+exports.getVideoTrailer = (req, res, next) => {};
 exports.deleteVideo = (req, res, next) => {
   const DBConn = getDataBaseConnection("deleteVideo");
   const userId = req.userData.userId;
@@ -202,8 +213,6 @@ exports.deleteVideo = (req, res, next) => {
       res.status(500).json(error);
       return;
     }
-    //try {
-
     try {
       video = await videoSchema
         .findOne({
